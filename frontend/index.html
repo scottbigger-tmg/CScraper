@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Career Scraper Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <!-- React + ReactDOM via CDN -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/axios/dist/axios.min.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <!-- Your backend API URL goes here -->
+    <script>
+      const API = 'https://<your-backend-service>.onrender.com';
+    </script>
+
+    <!-- Load JobDashboard -->
+    <script type="module">
+      import JobDashboard from './JobDashboard.js';
+      const root = ReactDOM.createRoot(document.getElementById('root'));
+      root.render(React.createElement(JobDashboard));
+    </script>
+  </body>
+</html>
