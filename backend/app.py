@@ -22,27 +22,77 @@ def jobs():
     if not os.path.exists(CSV_PATH):
         return jsonify([])
 
-    with open(CSV_PATH, newline='', encoding='utf-8') as f:
-        reader = csv.DictReader(f)
+    # Read a small sample to sniff delimiter & header presence
+    with open(CSV_PATH, 'r', encoding='utf-8', newline='') as f:
+        sample = f.read(4096)
+        f.seek(0)
 
-        # Normalize fieldnames (strip, lowercase, remove BOM)
-        raw_fieldnames = reader.fieldnames or []
-        normalized_to_original = {}
-        for fn in raw_fieldnames:
-            norm = fn.strip().lower().replace('\ufeff', '')  # remove BOM if present
-            normalized_to_original[norm] = fn  # map normalized -> original in file
+        # Try to detect delimiter
+        try:
+            sniffer = csv.Sniffer()
+            dialect = sniffer.sniff(sample, delimiters=[',', ';', '\t', '|'])
+            has_header = sniffer.has_header(sample)
+        except Exception:
+            # Fallback: assume comma-delimited, has header
+            class _Dialect(csv.Dialect):
+                delimiter = ','
+                quotechar = '"'
+                escapechar = None
+                doublequote = True
+                skipinitialspace = False
+                lineterminator = '\n'
+                quoting = csv.QUOTE_MINIMAL
+            dialect = _Dialect()
+            has_header = True
 
-        # Helper: pick first existing field from a list of candidate names
+        # If we think there's a header, try DictReader with the detected dialect
+        f.seek(0)
+        if has_header:
+            reader = csv.DictReader(f, dialect=dialect)
+            fieldnames = reader.fieldnames or []
+
+            # Normalize fieldnames
+            norm_map = {}
+            for fn in fieldnames:
+                norm = (fn or '').strip().lower().replace('\ufeff', '')
+                norm_map[norm] = fn
+
+            # If the sniffer failed and we got a single combined header (like "a,b,c,d"),
+            # split it manually and rebuild a DictReader.
+            if len(fieldnames) == 1 and ',' in fieldnames[0]:
+                # Manually parse header line, then rebuild reader from remaining lines
+                f.seek(0)
+                first_line = f.readline()
+                header = [h.strip().lower().replace('\ufeff', '') for h in first_line.split(',')]
+                remainder = f.read().splitlines()
+                reader = csv.DictReader(remainder, fieldnames=header, dialect=dialect)
+
+                norm_map = {h: h for h in header}
+
+        else:
+            # No header present: read rows and map by index
+            f.seek(0)
+            row_reader = csv.reader(f, dialect=dialect)
+            items = []
+            for row in row_reader:
+                # Safely pick by index if present
+                def get_i(i): return row[i].strip() if i < len(row) else ''
+                items.append({
+                    'company': get_i(0),
+                    'title': get_i(1),
+                    'location': get_i(2),
+                    'state': get_i(3),
+                })
+            return jsonify(items)
+
+        # Helper to pick a value using multiple candidate header names
         def pick(row, candidates):
             for key in candidates:
-                original = normalized_to_original.get(key)
-                if original:
-                    val = row.get(original)
-                    if val is not None and val != "":
-                        return val
-            return ""
+                original = norm_map.get(key)
+                if original and row.get(original):
+                    return row.get(original, '').strip()
+            return ''
 
-        # Common header variants to support
         company_keys  = ['company', 'employer', 'organization', 'org', 'companyname']
         title_keys    = ['title', 'jobtitle', 'position', 'role']
         location_keys = ['location', 'city', 'city/state', 'citystate', 'city, state']
@@ -56,7 +106,6 @@ def jobs():
                 'location': pick(row, location_keys),
                 'state':    pick(row, state_keys),
             })
-
         return jsonify(items)
 
 @app.route('/download', methods=['GET'])
