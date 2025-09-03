@@ -67,3 +67,25 @@ def download():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080)
+
+@app.route('/debug-headers', methods=['GET'])
+def debug_headers():
+    """Return the raw CSV headers and a couple of raw rows so we can see exact keys."""
+    if not os.path.exists(CSV_PATH):
+        return jsonify({"error": "no csv uploaded"}), 404
+
+    with open(CSV_PATH, newline='', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        fieldnames = reader.fieldnames or []
+
+        # Grab up to 2 raw rows to inspect keys/values
+        sample_rows = []
+        for i, row in enumerate(reader):
+            sample_rows.append(row)
+            if i >= 1:
+                break
+
+    return jsonify({
+        "fieldnames": fieldnames,
+        "sample_rows": sample_rows
+    })
