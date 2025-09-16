@@ -22,91 +22,110 @@ def jobs():
     if not os.path.exists(CSV_PATH):
         return jsonify([])
 
-    # Read a small sample to sniff delimiter & header presence
+    # Read all lines as text so we can handle fully-quoted lines
     with open(CSV_PATH, 'r', encoding='utf-8', newline='') as f:
-        sample = f.read(4096)
-        f.seek(0)
+        lines = [ln.rstrip('\r\n') for ln in f.readlines()]
 
-        # Try to detect delimiter
-        try:
-            sniffer = csv.Sniffer()
-            dialect = sniffer.sniff(sample, delimiters=[',', ';', '\t', '|'])
-            has_header = sniffer.has_header(sample)
-        except Exception:
-            # Fallback: assume comma-delimited, has header
-            class _Dialect(csv.Dialect):
-                delimiter = ','
-                quotechar = '"'
-                escapechar = None
-                doublequote = True
-                skipinitialspace = False
-                lineterminator = '\n'
-                quoting = csv.QUOTE_MINIMAL
-            dialect = _Dialect()
-            has_header = True
+    if not lines:
+        return jsonify([])
 
-        # If we think there's a header, try DictReader with the detected dialect
-        f.seek(0)
-        if has_header:
-            reader = csv.DictReader(f, dialect=dialect)
-            fieldnames = reader.fieldnames or []
+    def is_fully_quoted(s: str) -> bool:
+        return len(s) >= 2 and s.startswith('"') and s.endswith('"')
 
-            # Normalize fieldnames
-            norm_map = {}
-            for fn in fieldnames:
-                norm = (fn or '').strip().lower().replace('\ufeff', '')
-                norm_map[norm] = fn
+    # CASE A: Fully-quoted lines where commas are inside the quotes (your sample)
+    if all(is_fully_quoted(ln) for ln in lines):
+        # Unwrap quotes and split
+        header_raw = lines[0][1:-1]  # strip outer quotes
+        header = [h.strip().lower().replace('\ufeff', '') for h in header_raw.split(',')]
 
-            # If the sniffer failed and we got a single combined header (like "a,b,c,d"),
-            # split it manually and rebuild a DictReader.
-            if len(fieldnames) == 1 and ',' in fieldnames[0]:
-                # Manually parse header line, then rebuild reader from remaining lines
-                f.seek(0)
-                first_line = f.readline()
-                header = [h.strip().lower().replace('\ufeff', '') for h in first_line.split(',')]
-                remainder = f.read().splitlines()
-                reader = csv.DictReader(remainder, fieldnames=header, dialect=dialect)
+        data_rows = []
+        for ln in lines[1:]:
+            row_raw = ln[1:-1]  # strip outer quotes
+            parts = [p.strip() for p in row_raw.split(',')]
+            data_rows.append(dict(zip(header, parts)))
 
-                norm_map = {h: h for h in header}
-
-        else:
-            # No header present: read rows and map by index
+    else:
+        # CASE B: Normal CSV or mixed — use csv.Sniffer first, then fall back
+        with open(CSV_PATH, 'r', encoding='utf-8', newline='') as f:
+            sample = f.read(4096)
             f.seek(0)
-            row_reader = csv.reader(f, dialect=dialect)
-            items = []
-            for row in row_reader:
-                # Safely pick by index if present
-                def get_i(i): return row[i].strip() if i < len(row) else ''
-                items.append({
-                    'company': get_i(0),
-                    'title': get_i(1),
-                    'location': get_i(2),
-                    'state': get_i(3),
-                })
-            return jsonify(items)
+            try:
+                sniffer = csv.Sniffer()
+                dialect = sniffer.sniff(sample, delimiters=[',', ';', '\t', '|'])
+                has_header = sniffer.has_header(sample)
+            except Exception:
+                class _Dialect(csv.Dialect):
+                    delimiter = ','
+                    quotechar = '"'
+                    escapechar = None
+                    doublequote = True
+                    skipinitialspace = False
+                    lineterminator = '\n'
+                    quoting = csv.QUOTE_MINIMAL
+                dialect = _Dialect()
+                has_header = True
 
-        # Helper to pick a value using multiple candidate header names
-        def pick(row, candidates):
-            for key in candidates:
-                original = norm_map.get(key)
-                if original and row.get(original):
-                    return row.get(original, '').strip()
-            return ''
+            f.seek(0)
+            if has_header:
+                reader = csv.DictReader(f, dialect=dialect)
+                fieldnames = reader.fieldnames or []
 
-        company_keys  = ['company', 'employer', 'organization', 'org', 'companyname']
-        title_keys    = ['title', 'jobtitle', 'position', 'role']
-        location_keys = ['location', 'city', 'city/state', 'citystate', 'city, state']
-        state_keys    = ['state', 'st', 'province', 'region']
+                # Normalize fieldnames (handle single combined header like "a,b,c")
+                if len(fieldnames) == 1 and ',' in fieldnames[0]:
+                    f.seek(0)
+                    first_line = f.readline()
+                    header = [h.strip().lower().replace('\ufeff', '') for h in first_line.split(',')]
+                    remainder = f.read().splitlines()
+                    reader = csv.DictReader(remainder, fieldnames=header, dialect=dialect)
+                    data_rows = list(reader)
+                else:
+                    data_rows = list(reader)
+            else:
+                # No header: map by index
+                f.seek(0)
+                row_reader = csv.reader(f, dialect=dialect)
+                data_rows = []
+                for row in row_reader:
+                    def get_i(i): return row[i].strip() if i < len(row) else ''
+                    data_rows.append({
+                        'company': get_i(0),
+                        'title': get_i(1),
+                        'location': get_i(2),
+                        'state': get_i(3),
+                    })
+                return jsonify(data_rows)
 
-        items = []
-        for row in reader:
-            items.append({
-                'company':  pick(row, company_keys),
-                'title':    pick(row, title_keys),
-                'location': pick(row, location_keys),
-                'state':    pick(row, state_keys),
-            })
-        return jsonify(items)
+    # Normalize keys and map to the four fields we expose
+    def norm_key(k: str) -> str:
+        return (k or '').strip().lower().replace('\ufeff', '')
+
+    # Build a normalized->original key map for each row when needed
+    def pick(row: dict, candidates):
+        # Build map once per row
+        norm_map = {norm_key(k): k for k in row.keys()}
+        for key in candidates:
+            orig = norm_map.get(key)
+            if orig:
+                val = row.get(orig, '')
+                if val is not None and val != '':
+                    return str(val).strip()
+        return ''
+
+    company_keys  = ['company', 'employer', 'organization', 'org', 'companyname']
+    title_keys    = ['title', 'jobtitle', 'position', 'role']
+    location_keys = ['location', 'city', 'city/state', 'citystate', 'city, state']
+    state_keys    = ['state', 'st', 'province', 'region']
+
+    items = []
+    for r in data_rows:
+        items.append({
+            'company':  pick(r, company_keys),
+            'title':    pick(r, title_keys),
+            'location': pick(r, location_keys),
+            'state':    pick(r, state_keys),
+        })
+
+    return jsonify(items)
 
 @app.route('/download', methods=['GET'])
 def download():
