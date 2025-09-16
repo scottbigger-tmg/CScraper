@@ -138,3 +138,35 @@ def debug_headers():
         "fieldnames": fieldnames,
         "sample_rows": sample_rows
     })
+
+@app.route('/debug-raw', methods=['GET'])
+def debug_raw():
+    """Return the first few raw lines and byte markers to diagnose delimiter/BOM issues."""
+    if not os.path.exists(CSV_PATH):
+        return jsonify({"error": "no csv uploaded"}), 404
+
+    # Read both bytes and text to inspect BOM & raw lines
+    try:
+        with open(CSV_PATH, 'rb') as fb:
+            raw_bytes = fb.read(200)  # first 200 bytes
+    except Exception as e:
+        return jsonify({"error": f"read-bytes failed: {e}"}), 500
+
+    try:
+        with open(CSV_PATH, 'r', encoding='utf-8', newline='') as ft:
+            lines = []
+            for _ in range(5):  # first 5 lines
+                line = ft.readline()
+                if not line:
+                    break
+                lines.append(line.rstrip('\n'))
+    except Exception as e:
+        return jsonify({"error": f"read-text failed: {e}"}), 500
+
+    # Hex preview of first up-to-80 bytes
+    hex_preview = raw_bytes[:80].hex()
+
+    return jsonify({
+        "hex_preview_first_80_bytes": hex_preview,
+        "raw_text_first_lines": lines
+    })
