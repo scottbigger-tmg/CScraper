@@ -24,28 +24,31 @@ def jobs():
 
     # Read all lines as text so we can handle fully-quoted lines
     with open(CSV_PATH, 'r', encoding='utf-8', newline='') as f:
+        # Strip CR/LF but keep content; ignore empty/whitespace-only lines
         lines = [ln.rstrip('\r\n') for ln in f.readlines()]
-
     if not lines:
         return jsonify([])
 
     def is_fully_quoted(s: str) -> bool:
+        s = s.strip()
         return len(s) >= 2 and s.startswith('"') and s.endswith('"')
 
+    # Consider only non-empty lines for detection
+    nonempty = [ln for ln in lines if ln.strip() != '']
+
     # CASE A: Fully-quoted lines where commas are inside the quotes (your sample)
-    if all(is_fully_quoted(ln) for ln in lines):
+    if nonempty and all(is_fully_quoted(ln) for ln in nonempty):
         # Unwrap quotes and split
-        header_raw = lines[0][1:-1]  # strip outer quotes
+        header_raw = nonempty[0].strip()[1:-1]  # strip outer quotes
         header = [h.strip().lower().replace('\ufeff', '') for h in header_raw.split(',')]
 
         data_rows = []
-        for ln in lines[1:]:
-            row_raw = ln[1:-1]  # strip outer quotes
+        for ln in nonempty[1:]:
+            row_raw = ln.strip()[1:-1]  # strip outer quotes
             parts = [p.strip() for p in row_raw.split(',')]
             data_rows.append(dict(zip(header, parts)))
-
     else:
-        # CASE B: Normal CSV or mixed — use csv.Sniffer first, then fall back
+        # ... keep the rest of your existing code here (the Sniffer/DictReader path) ...
         with open(CSV_PATH, 'r', encoding='utf-8', newline='') as f:
             sample = f.read(4096)
             f.seek(0)
@@ -84,24 +87,22 @@ def jobs():
                 # No header: map by index
                 f.seek(0)
                 row_reader = csv.reader(f, dialect=dialect)
-                data_rows = []
+                items = []
                 for row in row_reader:
                     def get_i(i): return row[i].strip() if i < len(row) else ''
-                    data_rows.append({
+                    items.append({
                         'company': get_i(0),
                         'title': get_i(1),
                         'location': get_i(2),
                         'state': get_i(3),
                     })
-                return jsonify(data_rows)
+                return jsonify(items)
 
     # Normalize keys and map to the four fields we expose
     def norm_key(k: str) -> str:
         return (k or '').strip().lower().replace('\ufeff', '')
 
-    # Build a normalized->original key map for each row when needed
     def pick(row: dict, candidates):
-        # Build map once per row
         norm_map = {norm_key(k): k for k in row.keys()}
         for key in candidates:
             orig = norm_map.get(key)
