@@ -1,0 +1,19 @@
+[
+  {
+    "company":"ExampleCo (Greenhouse)",
+    "type":"greenhouse",
+    "url":"https://boards.greenhouse.io/exampleco"
+  },
+  {
+    "company":"SampleCorp (Lever)",
+    "type":"lever",
+    "url":"https://jobs.lever.co/samplecorp"
+  },
+  {
+    "company":"MyVenue (Generic)",
+    "type":"generic",
+    "url":"https://myvenue.com/careers",
+    "title_selector":".job-title",
+    "location_selector":".job-location"
+  }
+]
